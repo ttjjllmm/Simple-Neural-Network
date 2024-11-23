@@ -17,7 +17,7 @@ cat("\014");      # Clears the console screen
 Part 1. Data modification
 
 ```{r 5}
-setwd("C:/Users/tuukk/OneDrive - Hanken Svenska handelshogskolan/Masters Finance/Machine Learning")
+
 
 library(haven)
 Data23 = read_dta("Data_2023.dta")
