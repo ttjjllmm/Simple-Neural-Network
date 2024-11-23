@@ -1,0 +1,1141 @@
+---
+title: "ML Exercises 4(R)"
+author: "Tuukka Lukkari"
+date: "2024-05-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls());    # Clears all objects
+cat("\014");      # Clears the console screen
+#dev.off()   # Clears the Plots window
+```
+
+## 5: Single hidden layer feed-forward neural network
+
+Part 1. Data modification
+
+```{r 5}
+setwd("C:/Users/tuukk/OneDrive - Hanken Svenska handelshogskolan/Masters Finance/Machine Learning")
+
+library(haven)
+Data23 = read_dta("Data_2023.dta")
+ # Getting rid of NA-values
+
+library(dplyr)
+# Selecting the 23 predictors
+Data23 <- select(Data23, roe_t1_w, fyear, sales_growth_w, long_term_debt_w, short_term_debt_w,
+                        cash_to_at_w, capex_to_at_w, aqc_to_at_w, ap_to_at_w, currassets_to_at_w,
+                        derivative_to_at_w, amort_to_at_w, dvt_to_ebit_w, dividend_payer_w,
+                        goodwill_to_at_w, invcap_to_at_w, invt_to_at_w, short_inv_to_at_w,
+                        liabilities_to_at_w, curr_liabilities_to_at_w, notespay_to_at_w,
+                        ppe_to_at_w, def_taxes_to_at_w, income_taxes_to_at_w, ln_at_w)
+
+Data23 <- na.omit(Data23) # NA omit after selecting columns of interest to not remove rows where other columns have missing values
+View(Data23)
+
+
+
+
+df2017 = Data23 %>% filter(fyear == 2017)
+df2017 = df2017[, c(1, 3:25)] # Using only columns with values
+df2017
+
+
+df2018 = Data23 %>% filter(fyear == 2018)
+df2018 = df2018[, c(1, 3:25)]
+
+
+df2019 = Data23 %>% filter(fyear == 2019)
+df2019 = df2019[, c(1, 3:25)]
+
+train = rbind(df2017, df2018) # placing df2018 beneath df2017
+test = df2019
+
+compl =rbind(train, test)
+
+trainingrows = nrow(compl) - nrow(test)
+testrows = nrow(compl) - trainingrows
+```
+
+
+Part 2. Fitting the FNN
+
+```{r 5b, echo=FALSE}
+# Dependent variable: roe_t1_w
+# K hidden units in layer 1 (recall: single layer FNN)
+# Learning rate = 0.01
+# Batch size = 50
+# Epochs = 10
+# Report the test MSE!
+
+library(torch)
+
+# The following code is constructed with the help of 'Simple Neural Network in R' by Mikey Tabak
+# https://rpubs.com/mikeyt/simple_nn_in_r
+
+# for parallel processing
+library(purrr)
+
+continuous_features = c('sales_growth_w', 'long_term_debt_w', 'short_term_debt_w',
+                        'cash_to_at_w', 'capex_to_at_w', 'aqc_to_at_w', 'ap_to_at_w', 'currassets_to_at_w',
+                        'derivative_to_at_w', 'amort_to_at_w', 'dvt_to_ebit_w', 'dividend_payer_w',
+                        'goodwill_to_at_w', 'invcap_to_at_w', 'invt_to_at_w', 'short_inv_to_at_w',
+                        'liabilities_to_at_w', 'curr_liabilities_to_at_w', 'notespay_to_at_w',
+                        'ppe_to_at_w', 'def_taxes_to_at_w', 'income_taxes_to_at_w', 'ln_at_w')
+target_name = 'roe_t1_w'
+
+# Standardizing and scaling numerical data
+features = compl |>
+  dplyr::select(dplyr::all_of(continuous_features)) |>
+  scale() |>
+  tibble::as_tibble()
+
+target = compl |>
+  dplyr::select(dplyr::all_of(target_name)) |>
+  scale() |>
+  tibble::as_tibble()
+
+
+
+
+train_val = dplyr::bind_cols(features, target)
+
+
+
+
+
+dset <- torch::dataset(
+    name = "dset",
+
+    initialize = function(indices) {
+        data <- self$prepare_data(train_val[indices, ])
+        self$x <- data[[1]]
+        self$y <- data[[2]]
+    },
+
+    .getitem = function(i) {
+        x <- self$x[i, ]
+        y <- self$y[i, ]
+        
+        list(x, y)
+    },
+  
+    .length = function() {
+        dim(self$y)[1]
+    },
+
+    prepare_data = function(input) {
+        feature_cols <- input |>
+            dplyr::select(dplyr::all_of(continuous_features)) |>
+            as.matrix()
+
+        target_col <- input |>
+            dplyr::select(dplyr::all_of(target_name)) |>
+            as.matrix()
+    
+        list(
+            torch_tensor(feature_cols),
+            torch_tensor(target_col)
+        )
+    }
+)
+
+
+train_indices = 1:trainingrows
+valid_indices = (trainingrows+1):testrows
+
+
+
+# Dataloaders
+batch_size = 50
+
+
+train_ds = dset(train_indices)
+train_dl <- train_ds |>
+    dataloader(batch_size = batch_size, shuffle = TRUE)
+
+valid_ds <- dset(valid_indices)
+valid_dl <- valid_ds |>
+    dataloader(batch_size = batch_size, shuffle = FALSE)
+
+
+# Defining the neural network
+net <- nn_module(
+  "net",
+
+  initialize = function(num_numerical, fc1_dim
+                ) {
+    self$fc1 <- nn_linear(num_numerical, fc1_dim)
+    self$output <- nn_linear(fc1_dim, 1)
+  },
+
+  forward = function(x) {
+    x |> 
+        self$fc1() |>
+        nnf_relu() |>
+        self$output() |>
+        nnf_sigmoid()
+  }
+)
+
+# This is the number of neurons in the hidden layer of the neural network
+fc1_dim <- 100
+# The number of features is the number of neurons in the input layer
+num_numerical <- length(continuous_features)
+
+# build this neural net
+model <- net(num_numerical, fc1_dim)
+
+device <- if (cuda_is_available()) torch_device("cuda:0") else "cpu"
+
+model <- model$to(device = device)
+
+
+# Defining the hyperparameters
+learning_rate <- 0.01
+# using stochastic gradient descent for the optimizer
+optimizer <- optim_sgd(model$parameters, lr = learning_rate, momentum = 0)
+num_epochs <- 10
+# using mean squared error loss
+loss_func <- nnf_mse_loss
+
+
+# Training and validating the NN
+for (epoch in 1:num_epochs) {
+
+  model$train()
+  train_losses <- c()  
+
+  coro::loop(for (b in train_dl) {
+    optimizer$zero_grad()
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    loss$backward()
+    optimizer$step()
+    train_losses <- c(train_losses, loss$item())
+  })
+
+  model$eval()
+  valid_losses <- c()
+
+  coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    valid_losses <- c(valid_losses, loss$item())
+  })
+
+  cat(sprintf("Epoch %d: training loss: %3f, validation loss: %3f\n", epoch, mean(train_losses), mean(valid_losses)))
+}
+
+
+
+# we set model to evaluation model so it knows not to calculate gradients now
+model$eval()
+
+# predict the target for the validation dataset
+target_pred <- c()
+coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    #target_pred <- c(target_pred, output)
+    for (i in 1:length(output)) {
+        pred_array <- as_array(output)[i,]
+        target_pred <- c(target_pred, pred_array)
+    }
+})
+
+# get the observed target from the validation dataset
+# we use `as_array` to convert from tensors to standard R data structures
+target_obs <- as_array(valid_ds$y)
+
+
+
+# Unscaling the data
+# get mean and std dev from original data (these were used when scaling by the `scale` function)
+raw_target <- compl |>
+    dplyr::select(dplyr::all_of(target_name)) |>
+    dplyr::pull() 
+std_dev <- sd(raw_target)
+mn <- mean(raw_target)
+
+# unscale
+y_obs <- (target_obs * std_dev) + mn
+y_pred <- (target_pred *std_dev) + mn
+
+
+
+
+# Plotting
+plot(
+    y_obs, y_pred, main = "Model evaluation", 
+    xlab = "Observed target value", 
+    ylab = "Predicted target value", 
+    axes = FALSE, pch = 16
+)
+segments(
+    x0=0, y0=0, x1=max(y_obs), y1=max(y_obs), lty = 2, lwd = 4, col = "red"
+)
+axis(1)
+axis(2, las = 2)
+
+
+
+
+# Correlation between observed and predicted
+# Pearson correlation
+cor(y_obs, y_pred, method = "pearson")
+# Spearman correlation
+cor(y_obs, y_pred, method = "spearman")
+```
+
+```{r 5c, echo=FALSE}
+# Trying out different values for K
+
+
+for (i in 15:25) {
+  # The number of features is the number of neurons in the input layer
+  num_numerical <- length(continuous_features)
+
+  # build this neural net
+  model <- net(num_numerical, (i))
+
+  device <- if (cuda_is_available()) torch_device("cuda:0") else "cpu"
+
+  model <- model$to(device = device)
+
+
+  # Defining the hyperparameters
+  learning_rate <- 0.01
+  # using stochastic gradient descent for the optimizer
+  optimizer <- optim_sgd(model$parameters, lr = learning_rate, momentum = 0)
+  num_epochs <- 10
+  # using mean squared error loss
+  loss_func <- nnf_mse_loss
+
+  for (epoch in 1:num_epochs) {
+
+  model$train()
+  train_losses <- c()  
+
+  coro::loop(for (b in train_dl) {
+    optimizer$zero_grad()
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    loss$backward()
+    optimizer$step()
+    train_losses <- c(train_losses, loss$item())
+  })
+
+  model$eval()
+  valid_losses <- c()
+
+  coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    valid_losses <- c(valid_losses, loss$item())
+  })
+
+  cat(sprintf("Epoch %d: training loss: %3f, validation loss: %3f\n", epoch, mean(train_losses), mean(valid_losses)))
+  }
+}
+
+# K = 21 seems to yield the lowest validation loss.
+
+
+
+
+
+
+
+# Calculating test MSE with K=21
+
+fc1_dim <- 21
+# The number of features is the number of neurons in the input layer
+num_numerical <- length(continuous_features)
+
+# build this neural net
+model <- net(num_numerical, fc1_dim)
+
+  device <- if (cuda_is_available()) torch_device("cuda:0") else "cpu"
+
+  model <- model$to(device = device)
+
+
+  # Defining the hyperparameters
+  learning_rate <- 0.01
+  # using stochastic gradient descent for the optimizer
+  optimizer <- optim_sgd(model$parameters, lr = learning_rate, momentum = 0)
+  num_epochs <- 10
+  # using mean squared error loss
+  loss_func <- nnf_mse_loss
+
+  for (epoch in 1:num_epochs) {
+
+  model$train()
+  train_losses <- c()  
+
+  coro::loop(for (b in train_dl) {
+    optimizer$zero_grad()
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    loss$backward()
+    optimizer$step()
+    train_losses <- c(train_losses, loss$item())
+  })
+
+  model$eval()
+  valid_losses <- c()
+
+  coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    valid_losses <- c(valid_losses, loss$item())
+  })
+
+  cat(sprintf("Epoch %d: training loss: %3f, validation loss: %3f\n", epoch, mean(train_losses), mean(valid_losses)))
+  }
+
+# we set model to evaluation model so it knows not to calculate gradients now
+model$eval()
+
+# predict the target for the validation dataset
+target_pred <- c()
+coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    #target_pred <- c(target_pred, output)
+    for (i in 1:length(output)) {
+        pred_array <- as_array(output)[i,]
+        target_pred <- c(target_pred, pred_array)
+    }
+})
+
+# get the observed target from the validation dataset
+# we use `as_array` to convert from tensors to standard R data structures
+target_obs <- as_array(valid_ds$y)
+
+#Unscaling the data
+# get mean and std dev from original data (these were used when scaling by the `scale` function)
+raw_target <- compl |>
+    dplyr::select(dplyr::all_of(target_name)) |>
+    dplyr::pull() 
+std_dev <- sd(raw_target)
+mn <- mean(raw_target)
+
+# unscale
+y_obs <- (target_obs * std_dev) + mn
+y_pred <- (target_pred *std_dev) + mn
+
+testMSE_NNK = mean((y_pred - y_obs)^2) 
+testMSE_NNK
+
+```
+
+
+
+## 6. Experimenting with batch sizes
+
+
+```{r 6, echo=FALSE}
+# Trying out different values for the batch size
+
+
+for (i in 1:10) {
+
+  batch_size = i*10
+
+
+  train_ds = dset(train_indices)
+  train_dl <- train_ds |>
+      dataloader(batch_size = batch_size, shuffle = TRUE)
+
+  valid_ds <- dset(valid_indices)
+  valid_dl <- valid_ds |>
+      dataloader(batch_size = batch_size, shuffle = FALSE)
+
+
+  # Defining the neural network
+  net <- nn_module(
+    "net",
+
+    initialize = function(num_numerical, fc1_dim
+                  ) {
+      self$fc1 <- nn_linear(num_numerical, fc1_dim)
+      self$output <- nn_linear(fc1_dim, 1)
+    },
+
+    forward = function(x) {
+      x |> 
+          self$fc1() |>
+          nnf_relu() |>
+          self$output() |>
+          nnf_sigmoid()
+    }
+  )
+
+# This is the number of neurons in the hidden layer of the neural network
+fc1_dim <- 21
+# The number of features is the number of neurons in the input layer
+num_numerical <- length(continuous_features)
+
+# build this neural net
+model <- net(num_numerical, fc1_dim)
+
+device <- if (cuda_is_available()) torch_device("cuda:0") else "cpu"
+
+model <- model$to(device = device)
+
+
+
+  # Defining the hyperparameters
+  learning_rate <- 0.01
+  # using stochastic gradient descent for the optimizer
+  optimizer <- optim_sgd(model$parameters, lr = learning_rate, momentum = 0)
+  num_epochs <- 10
+  # using mean squared error loss
+  loss_func <- nnf_mse_loss
+
+  for (epoch in 1:num_epochs) {
+
+  model$train()
+  train_losses <- c()  
+
+  coro::loop(for (b in train_dl) {
+    optimizer$zero_grad()
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    loss$backward()
+    optimizer$step()
+    train_losses <- c(train_losses, loss$item())
+  })
+
+  model$eval()
+  valid_losses <- c()
+
+  coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    valid_losses <- c(valid_losses, loss$item())
+  })
+
+  cat(sprintf("Epoch %d: training loss: %3f, validation loss: %3f\n", epoch, mean(train_losses), mean(valid_losses)))
+  }
+}
+
+
+
+
+
+# Testing on-line gradient desccent, batch_size = 1
+
+
+  batch_size = 1
+
+
+  train_ds = dset(train_indices)
+  train_dl <- train_ds |>
+      dataloader(batch_size = batch_size, shuffle = TRUE)
+
+  valid_ds <- dset(valid_indices)
+  valid_dl <- valid_ds |>
+      dataloader(batch_size = batch_size, shuffle = FALSE)
+
+
+  # Defining the neural network
+  net <- nn_module(
+    "net",
+
+    initialize = function(num_numerical, fc1_dim
+                  ) {
+      self$fc1 <- nn_linear(num_numerical, fc1_dim)
+      self$output <- nn_linear(fc1_dim, 1)
+    },
+
+    forward = function(x) {
+      x |> 
+          self$fc1() |>
+          nnf_relu() |>
+          self$output() |>
+          nnf_sigmoid()
+    }
+  )
+
+# This is the number of neurons in the hidden layer of the neural network
+fc1_dim <- 21
+# The number of features is the number of neurons in the input layer
+num_numerical <- length(continuous_features)
+
+# build this neural net
+model <- net(num_numerical, fc1_dim)
+
+device <- if (cuda_is_available()) torch_device("cuda:0") else "cpu"
+
+model <- model$to(device = device)
+
+
+
+  # Defining the hyperparameters
+  learning_rate <- 0.01
+  # using stochastic gradient descent for the optimizer
+  optimizer <- optim_sgd(model$parameters, lr = learning_rate, momentum = 0)
+  num_epochs <- 10
+  # using mean squared error loss
+  loss_func <- nnf_mse_loss
+
+  for (epoch in 1:num_epochs) {
+
+  model$train()
+  train_losses <- c()  
+
+  coro::loop(for (b in train_dl) {
+    optimizer$zero_grad()
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    loss$backward()
+    optimizer$step()
+    train_losses <- c(train_losses, loss$item())
+  })
+
+  model$eval()
+  valid_losses <- c()
+
+  coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    valid_losses <- c(valid_losses, loss$item())
+  })
+
+  cat(sprintf("Epoch %d: training loss: %3f, validation loss: %3f\n", epoch, mean(train_losses), mean(valid_losses)))
+  }
+
+# we set model to evaluation model so it knows not to calculate gradients now
+model$eval()
+
+# predict the target for the validation dataset
+target_pred <- c()
+coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    #target_pred <- c(target_pred, output)
+    for (i in 1:length(output)) {
+        pred_array <- as_array(output)[i,]
+        target_pred <- c(target_pred, pred_array)
+    }
+})
+
+# get the observed target from the validation dataset
+# we use `as_array` to convert from tensors to standard R data structures
+target_obs <- as_array(valid_ds$y)
+
+#Unscaling the data
+# get mean and std dev from original data (these were used when scaling by the `scale` function)
+raw_target <- compl |>
+    dplyr::select(dplyr::all_of(target_name)) |>
+    dplyr::pull() 
+std_dev <- sd(raw_target)
+mn <- mean(raw_target)
+
+# unscale
+y_obs <- (target_obs * std_dev) + mn
+y_pred <- (target_pred *std_dev) + mn
+
+testMSE_bs1 = mean((y_pred - y_obs)^2) 
+testMSE_bs1
+# It appears to be that batch_size = 1 performs best on this data
+
+
+# We notice that the validation loss for batch size = 1 is the smallest and thus, we will use that to compute the final test MSE.
+```
+
+## 7. Experimenting with epochs
+
+
+```{r 7, echo=FALSE}
+
+# For this exercise, we will increase the batch size to 10 (from 1) to increase the speed of the backpropagation.
+
+  batch_size = 10
+
+
+  train_ds = dset(train_indices)
+  train_dl <- train_ds |>
+      dataloader(batch_size = batch_size, shuffle = TRUE)
+
+  valid_ds <- dset(valid_indices)
+  valid_dl <- valid_ds |>
+      dataloader(batch_size = batch_size, shuffle = FALSE)
+
+
+  # Defining the neural network
+  net <- nn_module(
+    "net",
+
+    initialize = function(num_numerical, fc1_dim
+                  ) {
+      self$fc1 <- nn_linear(num_numerical, fc1_dim)
+      self$output <- nn_linear(fc1_dim, 1)
+    },
+
+    forward = function(x) {
+      x |> 
+          self$fc1() |>
+          nnf_relu() |>
+          self$output() |>
+          nnf_sigmoid()
+    }
+  )
+
+# This is the number of neurons in the hidden layer of the neural network
+fc1_dim <- 21
+# The number of features is the number of neurons in the input layer
+num_numerical <- length(continuous_features)
+
+# build this neural net
+model <- net(num_numerical, fc1_dim)
+
+device <- if (cuda_is_available()) torch_device("cuda:0") else "cpu"
+
+model <- model$to(device = device)
+
+
+
+  # Defining the hyperparameters
+  learning_rate <- 0.01
+  # using stochastic gradient descent for the optimizer
+  optimizer <- optim_sgd(model$parameters, lr = learning_rate, momentum = 0)
+  num_epochs <- 200
+  # using mean squared error loss
+  loss_func <- nnf_mse_loss
+
+  for (epoch in 1:num_epochs) {
+
+  model$train()
+  train_losses <- c()  
+
+  coro::loop(for (b in train_dl) {
+    optimizer$zero_grad()
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    loss$backward()
+    optimizer$step()
+    train_losses <- c(train_losses, loss$item())
+  })
+
+  model$eval()
+  valid_losses <- c()
+
+  coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    valid_losses <- c(valid_losses, loss$item())
+  })
+
+  cat(sprintf("Epoch %d: training loss: %3f, validation loss: %3f\n", epoch, mean(train_losses), mean(valid_losses)))
+  }
+
+
+
+# Based on the results: we notice that increasing epochs decrease the loss functions for both the training and the test set. However, increasing the number of epochs too much induces higher probabilities of overfitting which will be detected by an increase in the validation loss and an almost perfect training loss.
+
+# We notice that the test MSE will start to occasionally increase after epoch 79
+
+  batch_size = 1
+
+
+  train_ds = dset(train_indices)
+  train_dl <- train_ds |>
+      dataloader(batch_size = batch_size, shuffle = TRUE)
+
+  valid_ds <- dset(valid_indices)
+  valid_dl <- valid_ds |>
+      dataloader(batch_size = batch_size, shuffle = FALSE)
+
+
+  # Defining the neural network
+  net <- nn_module(
+    "net",
+
+    initialize = function(num_numerical, fc1_dim
+                  ) {
+      self$fc1 <- nn_linear(num_numerical, fc1_dim)
+      self$output <- nn_linear(fc1_dim, 1)
+    },
+
+    forward = function(x) {
+      x |> 
+          self$fc1() |>
+          nnf_relu() |>
+          self$output() |>
+          nnf_sigmoid()
+    }
+  )
+
+# This is the number of neurons in the hidden layer of the neural network
+fc1_dim <- 21
+# The number of features is the number of neurons in the input layer
+num_numerical <- length(continuous_features)
+
+# build this neural net
+model <- net(num_numerical, fc1_dim)
+
+device <- if (cuda_is_available()) torch_device("cuda:0") else "cpu"
+
+model <- model$to(device = device)
+
+
+
+  # Defining the hyperparameters
+  learning_rate <- 0.01
+  # using stochastic gradient descent for the optimizer
+  optimizer <- optim_sgd(model$parameters, lr = learning_rate, momentum = 0)
+  num_epochs <- 79
+  # using mean squared error loss
+  loss_func <- nnf_mse_loss
+
+  for (epoch in 1:num_epochs) {
+
+  model$train()
+  train_losses <- c()  
+
+  coro::loop(for (b in train_dl) {
+    optimizer$zero_grad()
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    loss$backward()
+    optimizer$step()
+    train_losses <- c(train_losses, loss$item())
+  })
+
+  model$eval()
+  valid_losses <- c()
+
+  coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    valid_losses <- c(valid_losses, loss$item())
+  })
+
+  cat(sprintf("Epoch %d: training loss: %3f, validation loss: %3f\n", epoch, mean(train_losses), mean(valid_losses)))
+  }
+
+# we set model to evaluation model so it knows not to calculate gradients now
+model$eval()
+
+# predict the target for the validation dataset
+target_pred <- c()
+coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    #target_pred <- c(target_pred, output)
+    for (i in 1:length(output)) {
+        pred_array <- as_array(output)[i,]
+        target_pred <- c(target_pred, pred_array)
+    }
+})
+
+# get the observed target from the validation dataset
+# we use `as_array` to convert from tensors to standard R data structures
+target_obs <- as_array(valid_ds$y)
+
+#Unscaling the data
+# get mean and std dev from original data (these were used when scaling by the `scale` function)
+raw_target <- compl |>
+    dplyr::select(dplyr::all_of(target_name)) |>
+    dplyr::pull() 
+std_dev <- sd(raw_target)
+mn <- mean(raw_target)
+
+# unscale
+y_obs <- (target_obs * std_dev) + mn
+y_pred <- (target_pred *std_dev) + mn
+
+testMSE_epoch = mean((y_pred - y_obs)^2) 
+testMSE_epoch
+
+
+
+```
+
+## 8. Choosing a final NN model
+
+``` {r 8, TRUE}
+
+# For the final  model, we will use K = 21
+# Epchs = 79. We observed that the number of epochs does in fact affect the loss function value more than adjusting the other parameters.
+# The final model is actually the the model constructed in exercise 7
+
+ batch_size = 10
+
+
+  train_ds = dset(train_indices)
+  train_dl <- train_ds |>
+      dataloader(batch_size = batch_size, shuffle = TRUE)
+
+  valid_ds <- dset(valid_indices)
+  valid_dl <- valid_ds |>
+      dataloader(batch_size = batch_size, shuffle = FALSE)
+
+
+  # Defining the neural network
+  net <- nn_module(
+    "net",
+
+    initialize = function(num_numerical, fc1_dim
+                  ) {
+      self$fc1 <- nn_linear(num_numerical, fc1_dim)
+      self$output <- nn_linear(fc1_dim, 1)
+    },
+
+    forward = function(x) {
+      x |> 
+          self$fc1() |>
+          nnf_relu() |>
+          self$output() |>
+          nnf_sigmoid()
+    }
+  )
+
+
+# This is the number of neurons in the hidden layer of the neural network
+fc1_dim <- 21
+# The number of features is the number of neurons in the input layer
+num_numerical <- length(continuous_features)
+
+# build this neural net
+model <- net(num_numerical, fc1_dim)
+
+device <- if (cuda_is_available()) torch_device("cuda:0") else "cpu"
+
+model <- model$to(device = device)
+
+
+
+  # Defining the hyperparameters
+  learning_rate <- 0.01
+  # using stochastic gradient descent for the optimizer
+  optimizer <- optim_sgd(model$parameters, lr = learning_rate, momentum = 0)
+  num_epochs <- 79
+  # using mean squared error loss
+  loss_func <- nnf_mse_loss
+
+  for (epoch in 1:num_epochs) {
+
+  model$train()
+  train_losses <- c()  
+
+  coro::loop(for (b in train_dl) {
+    optimizer$zero_grad()
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    loss$backward()
+    optimizer$step()
+    train_losses <- c(train_losses, loss$item())
+  })
+
+  model$eval()
+  valid_losses <- c()
+
+  coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    valid_losses <- c(valid_losses, loss$item())
+  })
+
+  cat(sprintf("Epoch %d: training loss: %3f, validation loss: %3f\n", epoch, mean(train_losses), mean(valid_losses)))
+  }
+# we set model to evaluation model so it knows not to calculate gradients now
+model$eval()
+
+# predict the target for the validation dataset
+target_pred <- c()
+coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    #target_pred <- c(target_pred, output)
+    for (i in 1:length(output)) {
+        pred_array <- as_array(output)[i,]
+        target_pred <- c(target_pred, pred_array)
+    }
+})
+
+# get the observed target from the validation dataset
+# we use `as_array` to convert from tensors to standard R data structures
+target_obs <- as_array(valid_ds$y)
+
+#Unscaling the data
+# get mean and std dev from original data (these were used when scaling by the `scale` function)
+raw_target <- compl |>
+    dplyr::select(dplyr::all_of(target_name)) |>
+    dplyr::pull() 
+std_dev <- sd(raw_target)
+mn <- mean(raw_target)
+
+# unscale
+y_obs <- (target_obs * std_dev) + mn
+y_pred <- (target_pred *std_dev) + mn
+
+testMSE_bestNN = mean((y_pred - y_obs)^2) 
+testMSE_bestNN
+```
+
+
+## 9. Comparing the neural network with a regression model
+
+``` {r 9, echo = TRUE}
+  # OLS estimation
+lm.fit.OLS <- lm(roe_t1_w ~ ., data = train) # Using all variables in train
+
+OLS.testMSE <- mean((test$roe_t1_w - predict(lm.fit.OLS, test))^2)
+OLS.testMSE
+
+
+# The regression model still yields lower MSE, but this time, there is not a large difference.
+```
+
+
+
+## 10. L2 Regularization in neural networks
+
+```{r 10, echo=TRUE}
+ batch_size = 1
+
+
+  train_ds = dset(train_indices)
+  train_dl <- train_ds |>
+      dataloader(batch_size = batch_size, shuffle = TRUE)
+
+  valid_ds <- dset(valid_indices)
+  valid_dl <- valid_ds |>
+      dataloader(batch_size = batch_size, shuffle = FALSE)
+
+
+  # Defining the neural network
+  net <- nn_module(
+    "net",
+
+    initialize = function(num_numerical, fc1_dim
+                  ) {
+      self$fc1 <- nn_linear(num_numerical, fc1_dim)
+      self$output <- nn_linear(fc1_dim, 1)
+    },
+
+    forward = function(x) {
+      x |> 
+          self$fc1() |>
+          nnf_relu() |>
+          self$output() |>
+          nnf_sigmoid()
+    }
+  )
+
+
+# This is the number of neurons in the hidden layer of the neural network
+fc1_dim <- 21
+# The number of features is the number of neurons in the input layer
+num_numerical <- length(continuous_features)
+
+# build this neural net
+model <- net(num_numerical, fc1_dim)
+
+device <- if (cuda_is_available()) torch_device("cuda:0") else "cpu"
+
+model <- model$to(device = device)
+
+
+
+  # Defining the hyperparameters
+  learning_rate <- 0.01
+  # using stochastic gradient descent for the optimizer
+  optimizer <- optim_sgd(model$parameters, lr = learning_rate, momentum = 0, weight_decay = 0.00005) # L2 regularization used when including 'weight_decay'
+  num_epochs <- 79
+  # using mean squared error loss
+  loss_func <- nnf_mse_loss
+
+  for (epoch in 1:num_epochs) {
+
+  model$train()
+  train_losses <- c()  
+
+  coro::loop(for (b in train_dl) {
+    optimizer$zero_grad()
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    loss$backward()
+    optimizer$step()
+    train_losses <- c(train_losses, loss$item())
+  })
+
+  model$eval()
+  valid_losses <- c()
+
+  coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    loss <- loss_func(output, b[[2]]$to(dtype = torch_float(), device = device))
+    valid_losses <- c(valid_losses, loss$item())
+  })
+
+  cat(sprintf("Epoch %d: training loss: %3f, validation loss: %3f\n", epoch, mean(train_losses), mean(valid_losses)))
+  }
+# we set model to evaluation model so it knows not to calculate gradients now
+model$eval()
+
+# predict the target for the validation dataset
+target_pred <- c()
+coro::loop(for (b in valid_dl) {
+    output <- model(b[[1]]$to(device = device))
+    #target_pred <- c(target_pred, output)
+    for (i in 1:length(output)) {
+        pred_array <- as_array(output)[i,]
+        target_pred <- c(target_pred, pred_array)
+    }
+})
+
+# get the observed target from the validation dataset
+# we use `as_array` to convert from tensors to standard R data structures
+target_obs <- as_array(valid_ds$y)
+
+#Unscaling the data
+# get mean and std dev from original data (these were used when scaling by the `scale` function)
+raw_target <- compl |>
+    dplyr::select(dplyr::all_of(target_name)) |>
+    dplyr::pull() 
+std_dev <- sd(raw_target)
+mn <- mean(raw_target)
+
+# unscale
+y_obs <- (target_obs * std_dev) + mn
+y_pred <- (target_pred *std_dev) + mn
+
+testMSE_bestNNL2 = mean((y_pred - y_obs)^2) 
+testMSE_bestNNL2
+
+# Small improvements with L2 regularization.
+```
+
+
+
+## 11. Comparing all models and finding out which model is the best on roe_t1_w
+
+``` {r 11, echo = TRUE}
+
+
+#regtree.testMSE # Test MSE 0.2291364
+#prun.testMSE # 0.2291364
+#bag.testMSE # 0.197693
+#rd.testMSE.7 #  0.1902107
+#boost.testMSE2 # test MSE =  0.2129593, depth = 1
+# OLS.testMSE  0.2168291
+#testMSE_bestNNL2 performs sligthly better than the regression tree and the pruned regression tree. However, bagging, randomforest, boosting and the OLS model outperformed the NN on this data set.
+#[1] 0.223509
+```
+
+
+## 12 Executive summary
+
+The following models have been used to predict ROE in year t +1 during the exercises 2 and 4: regression tree, pruned regression tree, bagging, random forest, boosting, linear regression (OLS estimation) and now finally a simple one-layer feed-forward neural network.
+
+The most simple model, the linear regression forms its prediction by observing the linear relationship between the features and the variable to be predicted. Although, it is not the most advanced model, it performs relatively well if there is a linear relationship between the predicted variable and the features. When predicting ROE, it seems like there are some linear relationships which the linear regression model manages to capture.
+
+Decision trees like the regression tree and the pruned regression tree, base their predictions on mean values of observations with similar characteristics that the tree has managed to extract. In this manner, the algorithm is limited in its prediction outputs. To increase a decision tree's predictive power, it is possible to enhance the model with ensemble methods such as bagging, random forest and boosting. Bagging and random forests improve the regular regression tree by growing multiple trees and computing a mean value of the individual trees' outputs. In addition, by slightly randomizing the number of features to be considered when predicting, like in random forests, we get actually a pretty well performing model. On some different data it could even be preferred to grow trees sequentially as in boosting, but it was not the case for this particular data.
+
+Lastly, we have the neural network. The algorithm in neural networks is a lot more advanced than in a linear regression model or in decision trees. A neural network is capable of estimating almost any possible model and even perform well on different types of data on top of traditional cross-sectional data (such as images, text and time-series data). The algorithm in neural networks adjust the input values with parameters called biases and weights. These parameters are adjusted based on the learning rate in gradient descent. In addition to adjustments with weights and biases, the algorithm also transforms the values with activation functions. In this way, the model is capable of catching different types of relationship that it encounters during the training phase. 
+
+By observing the results, the neural network does perform worse than the linear regression. This could be due to a variety of different reasons. It is possible that the data is cherry picked to illustrate the power of linear regression and it could be too simple for a neural network. Neural networks perform best when there is a lot of data. Thus, it is highly possible that the neural network overfits the data during backpropagation. Overfitting can partly be dealt with using L2 regularization or a dropout rate, but at least L2 regularization did not yield remarkable improvements for this data. 
+
